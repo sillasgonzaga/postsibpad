@@ -1,0 +1,89 @@
+---
+title: "Utilizando Machine Learning para prever se uma reclamação no Consumidor.gov.br será atendida: Problema de classificação"
+output:
+  pdf_document: default
+  html_document:
+    keep_md: yes
+  github_document: default
+---
+
+## Introdução a Classificação
+
+No post anterior dessa série sobre os dados do site [Consumidor.gov.br](https://www.consumidor.gov.br/), fizemos a primeira etapa de qualquer projeto de *Machine Learning*: A limpeza e análise exploratória dos dados. Foi definido como objetivo tentar modelar os dados de forma que fosse possível estimar a probabilidade de uma reclamação ser solucionada.
+
+Em outras palavras, estamos interessados em saber, para um dada série de inputs $X_1, X_2, ..., X_n$, se o output $Y$ terá como valor "Resolvida" ou "Não Resolvida". Veja que Y pode assumir apenas esses dois valores (partindo do pressuposto que nenhuma reclamação fica com o Status *Em andamento* para sempre), sendo assim definida como uma variável binária.
+
+Em Machine Learning, esse tipo de problema é chamado de **Classificação Supervisionada**, que consiste em identificar em qual valor de uma variável categória uma nova observação pertence. Um exemplo clássico de um problema de Classificação é tentar designar se um dado e-mail deve ser identificado como spam ou não. Outras boas referências de aplicação de técnicas de Classificação são:
+
+* ["Why Should I Trust You?": Explaining the Predictions of Any Classifier](https://arxiv.org/abs/1602.04938): Ribeiro et al. criaram um método de explicar as variáveis explanatórias de qualquer modelo de Classificação, algo fundamental para aumentar a confiança nos resultados do modelo;  
+* [A machine learning approach to automatic music genre classification](http://www.scielo.br/scielo.php?pid=S0104-65002008000300002&script=sci_arttext): Neste trabalho, diversos algoritmos de classificação são testados, algo semelhante que faremos no próximo post da série;  
+
+O objetivo deste post é apresentar resumidamente os principais modelos de Classificação.
+
+## Algoritmos de classificação
+
+### Decision trees
+
+Algoritmos baseados em Decision Trees tentam achar maneiras de criar subsets ou subgrupos do universo dos dados, onde cada subgrupo pertence a um *node*. O objetivo do modelo é criar *nodes* onde haja uma distinção clara entre as classes previstas de forma que possa a cada *node* a probabilidade de um indivíduo pertencer a uma classe. O gráfico abaixo é um exemplo simples e didática de uma árvore de decisão:
+
+[![](https://3qeqpr26caki16dnhd19sv6by6v-wpengine.netdna-ssl.com/wp-content/uploads/2016/02/Example-Decision-Tree.png)](https://machinelearningmastery.com/classification-and-regression-trees-for-machine-learning/)
+
+Nesse modelo, que tenta prever o sexo de uma pessoa baseada na altura e no peso, o algoritmo de classificação funciona como uma série de regras **SE-NÃO**:  
+
+* Se a altura for maior que 180cm, o indivíduo é um homem;  
+* Se a altura é menor ou igual a 180cm e o peso é maior que 80kg, o indivíduo é homem;  
+* Caso contrário, o indivíduo é mulher.  
+
+No R, os modelos de Decision Trees são aplicados principalmente pelo pacote `rpart`.
+
+### Linear discriminant analysis
+
+LDA é um método usado para achar uma combinação linear entre as variáveis explanatórias que caracterizam duas ou mais classes de indivíduos. A combinação resultante pode ser usada como um modelo de Classificação ou para reduzir a dimensionalidade dos dados.
+Esse modelo calcula um vetor médio do qual um novo indivíduo é mais próximo e atribui a ele uma classe usando uma função de distância.
+
+No R, o LDA é implementador por `MASS::lda()`.
+
+Mais referências sobre LDA no R:
+
+* [Discriminant Analysis in R](https://rstudio-pubs-static.s3.amazonaws.com/35817_2552e05f1d4e4db8ba87b334101a43da.html);  
+* [Classification with Linear Discriminant Analysis](http://www.aaronschlegel.com/classification-linear-discriminant-analysis/); 
+
+
+### Adaboost
+
+Boosting funciona de uma maneira sequencial, aplicando um mesmo algoritmo de classificação *k* vezes em versões ponderadas do conjunto de treino (training set). Resumidamente, após a primeira vez que o algoritmo de classificação é rodado, os indivíduos classificados incorretamente passam e ter um peso maior, diminuindo o peso dos classificados corretamente.
+
+No R, o adaboost é implementado pelo pacote `ada`.
+
+* [adaboost - Data Mining Algorithms in R](https://en.wikibooks.org/wiki/Data_Mining_Algorithms_In_R/Classification/adaboost)
+
+### Naive Bayes
+
+O teorema de Bayes é um dos mais conhecidos na Estatística. Um bom livro que aborda o tema é Sinal e Ruído. Sua formula é dada por:
+
+P(output | evidência) = P(output) * P(evidência | output) / P(evidência)
+
+Essa formulação é baseada em um conceito muito importante em estatística chamada Probabilidade Condicional. Além disso, o modelo de Naive Bayes assume como pressuposto que as variáveis são independente entre si, quando nem sempre isso acontece.
+
+No R, o modelo de Naive Bayes é implementado pelo pacote `e1071`.  
+
+* [Naive Bayes Classification in R](https://sw23993.wordpress.com/2017/02/17/naive-bayes-classification-in-r-part-2/)
+
+### Nearest neighbors
+
+O modelo de Nearest neighbor consiste simplesmente em armazenar todos os indivíduos e suas classes (a variável resposta). Nenhum modelo é treinado. Na etapa de previsão da classe de um novo indivíduo $y$, calcula-se a distância entre $y$ e todos os elementos da série de treino, identifica-se os **k** vizinhos mais próximos e utiliza-se a classe dos vizinhos mais próximos para determinar a classe de $y$. O parâmetro **k** é fundamental para a modelagem e pode resultar em previsões diferentes de acordo com seu valor:
+
+
+[![](http://i.imgur.com/ksMG5ro.png)](http://edirlei.3dgb.com.br/aulas/ia_2012_1/IA_Aula_16_KNN.pdf)
+
+No R, existem diferentes implementações do kNN, sendo uma delas fornecida pelo pacote `RWeka`.
+
+* [kNN](https://en.wikibooks.org/wiki/Data_Mining_Algorithms_In_R/Classification/kNN)
+
+### Outros modelos:
+
+* [Suppor Vector Machine (SVM)](https://dataaspirant.com/2017/01/13/support-vector-machine-algorithm/);  
+* [Random Forests](http://dataaspirant.com/2017/05/22/random-forest-algorithm-machine-learing/)
+
+No próximo post da série, implementaremos esses modelos para atingir nosso objetivo de previsão.
+

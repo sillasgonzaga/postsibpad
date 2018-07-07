@@ -1,0 +1,137 @@
+---
+title: "Descobrindo quais são os pacotes de séries temporais mais populares do R"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+Neste post, mostraremos:
+
+* O que são as "Task views" do CRAN, o repositório oficial de pacotes do R;  
+* Um tutorial simples porém útil de Web Scraping, de manuseio de texto e de expressões regulares (regex);  
+* Um exemplo de manuseio de dados usando o [tidyverse](http://tidyverse.org/);  
+* Os 20 pacotes de séries temporais mais populares (em número de downloads) do R.
+
+
+## Views do CRAN
+
+O R já ultrapassou a marca de [10 mil pacotes](http://blog.revolutionanalytics.com/2017/01/cran-10000.html) disponibilizados no CRAN, o repositório oficial de pacotes do R. Não se tem notícia de nenhum outro programa estatístico que possua tanta diversidade de aplicações, ainda mais de forma gratuita. Mas isso também pode ter um lado ruim: como achar um pacote que você precisa?
+
+Para organizar e categorizar essa infinidade de pacotes, o pessoal do CRAN tem uma página chamada [Task Views](https://cran.r-project.org/web/views/), onde os pacotes são divididos em 35 páginas: existem grupos para [Finanças](https://cran.r-project.org/web/views/Finance.html), [Econometria](https://cran.r-project.org/web/views/Econometrics.html), [Machine Learning](https://cran.r-project.org/web/views/MachineLearning.html), [Psicometria](https://cran.r-project.org/web/views/Psychometrics.html) e, claro, [Séries Temporais](https://cran.r-project.org/web/views/TimeSeries.html), além de outros.
+
+O responsável pela Task View de Séries Temporais não é ninguém menos que Rob Hyndman, um dos maiores especialistas do assunto no mundo.
+
+Vamos então nos propor um desafio: contar, automaticamente, a quantidade de pacotes listados na Task View de Séries Temporais por meio de Web Scraping na página. Para isso, precisamos ler o código fonte da página, extrair os links de pacotes e remover as duplicatas.
+
+## Web scraping
+
+Para este tutorial, usamos os seguintes pacotes:
+
+```{r}
+library(rvest) # web scraping
+library(stringr) # manipulação de text (strings)
+library(tidyverse) # suite de pacotes do tidyverse, como dplyr e ggplot2
+library(cranlogs) # baixar logs de downloads de pacotes do CRAN
+library(magrittr) # ja que eu nao vivo sem em um bom %<>%
+library(glue) # para colar textos
+
+```
+
+Como o web scraping em si não é o objetivo principal do post, não vou entrar em detalhes sobre o código escrito para extrair os links, mas os comentários no código explicam parcialmente o que cada linha faz.
+
+```{r}
+view <- "https://cran.r-project.org/web/views/TimeSeries.html"
+
+urls <- view %>% 
+  read_html %>% # lê o codigo fonte da pagina
+  html_nodes("a") %>% # filtra todo o texto dentro da tag html <a>
+  html_attr("href") # filtra todo o texto cujo atributo é href (usado para se referir a links)
+
+# dando uma olhada no output
+
+urls %>% head(20)
+```
+
+
+Notamos quatro problemas que precisamos consertar:  
+1. É necessário extrair o nome dos pacotes de uma string do tipo `../packages/zoo/index.html`, onde `zoo` é o nome do pacote;  
+2. Links de pacotes vêm incompletos: `../packages/zoo/index.html` ao invés de `https://cran.r-project.org/web/packages/forecast/index.html`;  
+3. Muitos links além das urls de pacotes são extraídas;  
+4. Existem duplicatas.  
+
+Vamos resolver um problema por vez (não necessariamente na ordem acima). Primeiro, extraímos os strings que possuem o padrão `/packages/` e removemos as duplicatas:
+
+```{r}
+
+# extrair apenas links com "../packages/"
+urls <- urls[str_detect(urls, "/packages/")]
+# excluir duplicatas
+urls <- unique(urls)
+# ver como ficou
+urls %>% head(20)
+```
+
+Para extrair o nome dos pacotes, usamos uma aplicação simples de expressões regulares para remover os caracteres `../packages/` e `/index.html`. 
+
+```{r}
+
+# extrair nome do pacote apenas do string
+pacotes <- urls %>% str_replace_all("[..]+/packages/|index.html|/",  "")
+# classificar em ordem alfabetica 
+pacotes %<>% sort
+# ver como ficou
+pacotes %>% head(20)
+```
+
+Funcionou perfeitamente. Quantos pacotes temos no total?
+
+```{r}
+pacotes %>% length
+```
+
+São impressionantes 234 pacotes relacionados a séries temporais! Vale a pena ler a página da Task View de Séries Temporais para uma breve descrição de cada um desses pacotes.
+
+## Medindo a popularidade dos pacotes
+
+234 não são 10 mil, mas ainda assim é um número grande de pacotes para quem usa ou quer começar a usar o R para análise de Séries Temporais. Uma boa maneira de saber os pacotes mais importantes é medindo sua popularidade em número de downloads nos últimos 30 dias.
+
+```{r cranlogs}
+
+# baixar quantidade de downloads desses pacotes no ultimo mes
+dls <- cran_downloads(packages = pacotes, when = "last-month")
+# dando uma olhada no output
+head(dls)
+```
+
+A função resulta em um data frame simples de três colunas: data, quantidade de downloads e nome do pacote. Vamos então fazer um gráfico dos 20 pacotes mais baixados:
+
+```{r grafico}
+# agrupar os dados usando o dplyr
+df <- dls %>% 
+  group_by(package) %>% 
+  summarise(total_dls = sum(count, na.rm = TRUE)) %>% 
+  top_n(20, total_dls)
+
+# eu costumo usar um tema pessoal meu para deixar os graficos do ggplot2 mais atraentes
+devtools::source_gist("https://gist.github.com/sillasgonzaga/ae62d57836c37ebff4a5f7a8dc32eeb7", filename = "meu_tema.R")
+azul <- "#01a2d9" # cor da barra
+
+ggplot(df, aes(x = reorder(package, total_dls), y = total_dls)) +
+    geom_col(fill = azul) +
+    coord_flip() + 
+    meu_tema() +
+    geom_text(aes(label = total_dls), hjust = 1, color = "black", size = 3) +
+    labs(x = "Pacote", y = "Downloads nos últimos 30 dias",
+         title = "Os 20 pacotes sobre séries temporais do R mais baixados",
+         subtitle = "Fonte: Logs de download do CRAN (pacote cranlogs)")
+
+
+
+```
+
+Confesso que, desses 20 pacotes, conheço apenas o `zoo`, `lubridate`, `forecast`, `xts`, `fpp`, `dygraphs` e `vars`. Vale o exercício de entrar nas páginas desses pacotes para entender o porquê de suas popularidades.
+
+
+P.S.: Não necessariamente um pacote precisa estar dentro de uma Task View. Além disso, não sei muito bem como é o processo de cadastro de um pacote em uma View, pois o meu pacote, o [mafs](https://github.com/sillasgonzaga/mafs), está na de Séries Temporais sem 

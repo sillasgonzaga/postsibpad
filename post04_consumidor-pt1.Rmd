@@ -1,0 +1,156 @@
+---
+title: "Utilizando Machine Learning para prever se uma reclamação no Consumidor.gov.br será atendida"
+output:
+  pdf_document: default
+  html_document:
+    keep_md: yes
+  github_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+
+## Introdução
+
+De acordo com o próprio site, o [Consumidor.gov.br](https://www.consumidor.gov.br/) é um serviço público para solução alternativa de conflitos de consumo disponibilizado por meio de plataforma tecnológica de informação, interação e compartilhamento de dados monitorada pelos Procons e pela Secretaria Nacional do Consumidor do Ministério da Justiça, com o apoio da sociedade. Ele é gerido pela Secretaria Nacional do Consumidor, órgão vinculado ao Poder Executivo Federal.
+
+Nele, o consumidor pode registrar sua reclamação caso a empresa em questão seja cadastrada no site. A partir daí, a empresa tem até 10 dias para dar algum tipo de retorno. Após a resposta da empresa, o consumidor tem até 20 dias para avaliar a resposta recebida, classificar sua reclamação como **Resolvida** ou **Não Resolvida** e indicar o grau de satisfação com o atendimento prestado pela empresa.
+
+Felizmente, o site possui um portal de Dados Abertos, no qual disponibiliza em formato csv os dados de todos os registros realizados no site, separados por mês.
+
+A partir desses dados, é possível praticar um exercício simples de Data Science: tentar analisar a influência de variáveis presentes nos dados na probabilidade de uma reclamação ser solucionada ou não.
+
+Esta análise será dividida em três posts: Neste **primeiro**, será feita uma análise exploratória, uma etapa fundamental em qualquer projeto de modelagem estatística. No **segundo**, será apresentado um resumo simples das técnicas mais conhecidas de Machine Learning que podem ser usadas neste contexto. No **terceiro**, finalmente, os algoritmos apresentados no segundo post serão aplicados ao nosso objeto de estudo.
+
+## Os dados
+
+Os dados abertos do Consumidor.gov.br podem ser obtidos na página de Dados Abertos do site, [neste link](https://www.consumidor.gov.br/pages/dadosabertos/externo/). Para esta análise (feita em 20/08/2017), usaremos os dados de Junho de 2017, para não correr o risco de incluir na análise alguma reclamação que ainda esteja em andamento.
+
+Para esta análise, serão usados os seguintes pacotes:
+
+```{r}
+library(tidyverse)
+library(magrittr)
+library(janitor)
+library(mlr)
+library(abjutils)
+library(formattable)
+```
+
+Hora de carregar os dados
+
+```{r}
+
+df <- read.csv2("data/2017-06.csv", fileEncoding = "ISO-8859-1")
+# dando uma olhada nos dados
+glimpse(df)
+```
+
+Os dados estão dispostos em 46 mil linhas e 20 colunas. Para entender o que cada uma significa, recomendo ler o Dicionário dos dados, um documento em PDF também dosponível [aqui](https://www.consumidor.gov.br/pages/dadosabertos/externo/). 
+
+Antes de prosseguir com a análise, vamos formatar o nome das colunas usamos duas funcões muito úteis: a `janitor::clean_names()` e a `abjutils::rm_accent()`, para remover acentos:
+
+```{r}
+df %<>% clean_names()
+names(df) %<>% rm_accent()
+# vendo como ficou
+glimpse(df)
+```
+
+## Análise exploratória
+
+As possibilidades de análises a partir desses dados são inúmeras. Poderíamos responder a perguntas como:  
+* Quem reclama mais, homem ou mulher?  
+* Qual empresa mais recebe reclamações?  
+* Qual o principal foco de reclamação?  
+* Quais segmentos de mercado recebem as piores notas pelos consumidores?  
+
+Algumas dessas perguntas são respondidas no próprio Consumidor.gov.br, que disponibliza [uma página](https://www.consumidor.gov.br/pages/indicador/geral/abrir) com indicadores.
+
+Para esta análise, a variável em foco é a `avaliacao_reclamacao`, que informa a situação final da reclamação. Antes, vamos ver quantas reclamações de Junho já foram finalizadas:
+
+```{r}
+df %>% 
+  count(situacao) %>%
+  mutate(proporcao = 100 * round(n/sum(n), 3)) %>% 
+  formattable()
+
+
+
+```
+
+Temos que 52,6% das reclamações já foram finalizadas. Os registros em andamento serão desconsiderados da análise:
+
+```{r}
+df %<>% filter(situacao != "Finalizada não avaliada")
+
+```
+
+Das reclamações finalizadas, quantas foram resolvidas?
+
+```{r}
+df %>% 
+  count(avaliacao_reclamacao) %>%
+  mutate(proporcao = 100 * round(n/sum(n), 3)) %>% 
+  formattable()
+```
+
+Temos que 64,3% das reclamações são resolvidas. Ou seja, se construirmos um modelo baseado puramente em simples adivinhação, designando que toda e qualquer reclamação registrada no site será atendida, a eficiência desse modelo seria de 64,3%. Esse valor é o nosso baseline, isto é, um modelo estatístico, para ser considerado bom, deverá apresentar uma acurácia superior a essa.
+
+Voltando à análise exploratória, uma excelente maneira de analisar a influência das variáveis explanatórias na variável resposta é por meio de gráficos. Por exemplo, qual seria uma maneira de visualizar a distribuição de reclamações respondidades de acordo com a faixa etária do consumidor?
+
+```{r}
+
+df %>% 
+  ggplot(aes(x = faixa_etaria, fill = avaliacao_reclamacao)) + 
+    geom_bar(position = position_fill()) + # grafico de barras
+    scale_x_discrete(limits = rev(levels(df$faixa_etaria))) + # deixar o eixo em ordem alfabetica
+    scale_y_continuous(breaks = seq(0, 1, 0.1)) + # mudar escala do eixo numerico
+    geom_hline(yintercept = 0.643, linetype = "dashed")  + # reta vertical que indica a media geral
+    labs(y = NULL, fill = NULL) +
+    coord_flip()  # transpor gráfico  
+  
+  
+```
+
+Vemos que a faixa etária do consumidor pouco importa na resolução de uma reclamação: apenas no grupo mais jovem o resultado se distancia mais do resultado médio geral (64,3%).
+
+Vamos então fazer esse mesmo gráfico mas para outras variáveis. Como não é uma boa prática dar Ctrl+C e Ctrl+V para reaplicar o código acima apenas para produzir gráficos de outras variáveis, vamos definir uma nova função:
+
+```{r}
+
+meu_grafico <- function(variavel) {
+  ggplot(df, aes_string(x = variavel, fill = "avaliacao_reclamacao")) + 
+    geom_bar(position = position_fill()) +
+    geom_hline(yintercept = 0.643, linetype = "dashed")  + # reta vertical que indica a media geral
+    scale_x_discrete(limits = rev(levels(df[[variavel]]))) + 
+    scale_y_continuous(breaks = seq(0, 1, 0.1)) +
+    labs(y = NULL, fill = NULL) +
+    coord_flip() + 
+    theme(legend.position = "none")
+}
+
+# rodar um loop nas variaveis escolhidas
+variaveis_analise <- c("regiao", "uf", "sexo", "faixa_etaria", "segmento_de_mercado",
+                       "area", "grupo_problema", "como_comprou_contratou",
+                       "procurou_empresa")
+
+
+variaveis_analise %>% map(meu_grafico)
+
+```
+
+O código acima é uma boa demonstração dos benefícios da programação funcional: escrever um código que realizar uma série de tarefas em poucas linhas de código.
+
+Sobre o gráfico, temos que:  
+* As variáveis `sexo`, `faixa_etaria`, `regiao`, `uf` e `procurou_empresa` não aparentam influenciar a variável resposta;  
+* As variáveis `area`, `como_comprou_contratou`, `segmento_de_mercado` e `grupo_problema` aparentam influenciar a variável resposta.  
+
+Ficaremos com essas informações em mente para a continuação da análise.
+
+
+
+
+

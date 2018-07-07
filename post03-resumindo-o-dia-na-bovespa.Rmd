@@ -1,0 +1,150 @@
+---
+title: "Resumindo o dia na Bovespa em 30 segundos com o R"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width = 9)
+```
+
+Nesse post, mostraremos:  
+* Um uso criativo do R: resumir o que aconteceu no dia na Bovespa, mostrando as ações de melhor e pior desempenho, tudo isso em um código que roda bem rápido.
+
+## Introdução
+
+Uma boa maneira de melhorar suas habilidades em R é desenvolvendo projetos práticos, mesmo que não seja algo que envolva aplicar técnicas avançadas estatísticas.
+
+Suponha por exemplo que você gostaria que houvesse um site que mostrasse no final do dia as principais movimentações na Bovespa, destacando as ações que tiveram uma maior variação no seu preço da ação em comparação com o preço de fechamento anterior.
+
+Uma boa maneira de trabalhar com dados de ações seria com o pacote `quantmod`. Contudo, para cumprir o desafio proposto neste post, seria necessário baixar manualmente as ações de cada uma das empresas listadas na Bovespa (lista essa que você teria de criar manualmente), agrupar os dados em uma estrutura única (como um data frame) e aplicar as funções de data wrangling necessárias.
+
+Outra, que será a abordada aqui, é pelo web scraping, que consiste em extrair dados de páginas na Internet de forma automatizada. Para isso, [esta página no site da Exame](http://exame.abril.com.br/mercados/cotacoes-bovespa/acoes?page=1) nos ajuda. Ela (e as páginas subsequentes) traz uma tabela com o nome da empresa, o preço da ação em R$ e a variação em relação ao fechamento anterior, entre outras. Nós precisamos, então, extrair a tabela da página, fazer a limpeza necessária e trabalhar com os dados. Isso é muito mais fácil do que parece.
+
+Para este tutorial, usaremos estes pacotes:
+
+```{r}
+library(rvest) # web scraping
+library(tidyverse) # suite de pacotes
+library(magrittr) # pipe = S2
+library(stringr) # manipulacao de texto
+library(ggthemes) # usaremos para fazer graficos parecidos com o da The Economist
+library(ggrepel) # para plotar o nome das principais acoes
+```
+
+## Obtenção dos dados
+
+Primeiramente, vamos construir um vetor com todas as páginas das ações.No momento deste post, eram 17:
+
+```{r}
+url.exame <- paste0("http://exame.abril.com.br/mercados/cotacoes-bovespa/acoes?page=",
+                    1:17)
+```
+
+Sobre cada página criada no comando acima, será executada a função criada abaixo para extrair a tabela que precisamos:
+
+```{r}
+
+extrair.tabela <- function(pagina_exame) {
+  pagina_exame %>% 
+    read_html() %>% # le codigo fonte da pagina
+    html_table() %>% # extrai tabelas da pagina
+    .[[2]] %>%  # por tentativa e erro, das tabelas retornadas, a que queremos é a segunda
+    select(1:3) %>% # apenas as tres primeiras colunas sao usadas 
+    set_names(c("acao", "preco_reais", "variacao")) %>% # renomeia colunas
+    as.data.frame()
+}
+```
+
+
+```{r}
+lista.acoes <- url.exame %>% map(extrair.tabela)
+# checando se deu certo
+lista.acoes %>% map_lgl(is.data.frame)
+# transformar os 17 dataframes em um so
+df.acoes <- lista.acoes %>% bind_rows()
+# checando o arquivo
+str(df.acoes)
+
+```
+
+## Limpeza dos dados
+
+Como visto, os dados precisam passar por uma certa limpeza:  
+* A coluna `acao` precisa ser quebrada em duas: uma com o código da ação (Ex.: ABEV3) e outra com o nome da empresa. Ambas são separadas pelo string `\n`;  
+* As duas outras colunas precisam ser convertidas para numéricas.  
+
+Essas tarefas também não são difíceis graças aos pacotes `tidyr` e `stringr`:
+
+```{r}
+# 1) Separar a primeira coluna em duas diferentes pelo separador "\n"
+df.acoes %<>% separate(acao, c("codigo_acao", "nome_empresa"), "[\n]")
+df.acoes$nome_empresa %<>% str_trim()
+
+# 2) Converter colunas de preco e de variacao para numerico
+df.acoes$preco_reais %<>% str_replace("\\.", "") # remover pontos (ex.:1.004,15)
+df.acoes$preco_reais %<>% str_replace(",", ".") # remover pontos (ex.:1.004,15)
+df.acoes$preco_reais %<>% as.numeric()
+
+df.acoes$variacao %<>% str_replace("\\.", "") # remover pontos (ex.:1.004,15)
+df.acoes$variacao %<>% str_replace(",", ".") # remover pontos (ex.:1.004,15)
+df.acoes$variacao %<>% as.numeric()
+
+str(df.acoes)
+```
+
+## Análise e apresentação dos dados
+
+
+Agora já estamos prontos para partir para a análise.
+
+Primeiramente, qual a distribuição da variação dos preços das ações?
+
+```{r}
+df.acoes %>% 
+  ggplot(aes(x = variacao)) + 
+    geom_histogram() +
+    theme_economist()
+```
+
+No geral, as ações variaram em torno de 0%, com a mediana estando ligeiramente para a esquerda do zero. O histograma mostra que existem alguns outliers, tanto para cima como para baixo.
+
+Vamos analisar quais foram as ações que mais variaram no dia de hoje:
+
+```{r}
+# maiores subidas e quedas:
+limite_inferior <- df.acoes$variacao %>% sort %>% head(5) %>% .[5]
+limite_superior <- df.acoes$variacao %>% sort %>% tail(5) %>% .[1]
+
+df.destaque <- df.acoes %>% 
+  filter(variacao <= limite_inferior | variacao >= limite_superior) %>% 
+  arrange(desc(variacao))
+
+df.destaque %>% knitr::kable()
+```
+
+Uma boa maneira de resumir o dia de hoje seria em um gráfico que correlaciona o preço da ação com sua variação, destacando o TOP 10 acima:
+
+```{r}
+df.acoes %>% 
+  ggplot(aes(x = variacao, y = preco_reais)) + 
+    geom_point() + 
+    geom_text_repel(data = df.destaque, aes(label = codigo_acao)) +
+    theme_economist() + 
+    labs(x = "Variação (%)", y = "Preço (R$)",
+         title = "Painel de resumo diário da Bovespa",
+         caption = "Blog do IBPAD - Sillas Gonzaga")
+
+```
+
+No código acima, o pacote `ggrepel` foi usado para plotar os nomes das ações de destaque, garantindo que eles não se cruzassem. Um outlier prejudicou a visualização:
+
+```{r}
+
+df.acoes %>%
+  filter(preco_reais > 40000) %>% 
+  knitr::kable()
+
+```
+
+
+O código completo deste post está presente [neste gist](https://gist.github.com/sillasgonzaga/ad7ecc08aad76c48ead83b5806c6234b).

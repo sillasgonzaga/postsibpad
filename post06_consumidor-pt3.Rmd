@@ -1,0 +1,160 @@
+---
+title: "Utilizando Machine Learning para prever se uma reclamação no Consumidor.gov.br será atendida: Aplicando os modelos"
+output:
+  pdf_document: default
+  html_document:
+    keep_md: yes
+  github_document: default
+---
+
+Após a análise exploratória no primeiro post e a apresentação teórica de alguns modelos de Classificação no segundo, neste terceiro iremos aplicar os modelos e analisar alguns dos resultados. 
+
+```{r pacotes, message=FALSE, warning=FALSE}
+# Pacotes
+library(tidyverse)
+library(magrittr)
+library(janitor)
+library(abjutils)
+library(rpart)
+library(rpart.plot)
+library(ada)
+library(e1071)
+library(RWeka)
+library(randomForest)
+library(caret)
+```
+
+```{r importar-dados}
+# Refazer limpeza dos dados
+df <- read.csv2("data/2017-07.csv", fileEncoding =  "ISO-8859-1", stringsAsFactors = FALSE)
+# limpar nomes das colunas
+df %<>% clean_names()
+# remover acentos das colunas
+names(df) %<>% rm_accent()
+df %<>% filter(avaliacao_reclamacao != "Não Avaliada")
+```
+
+Lembrando que, na nossa análise exploratória, identificamos as variáveis de maior relevância para prever a resolução ou não de uma reclamação:
+
+```{r wrangling01}
+# filtrando apenas as colunas de relevancia
+df %<>% select(area, como_comprou_contratou, segmento_de_mercado, grupo_problema, avaliacao_reclamacao)
+# transformar em fator
+df %<>% mutate_all(as.factor)
+```
+
+
+Seguindo uma boa prática em modelagem, vamos separar os dados em dois conjuntos: o de treino, que será usado para construir os modelos, e o de teste, que será usado para avaliar a acurácia dos modelos.
+
+```{r split-train-test}
+# criar series de treino e teste
+set.seed(123) # Usamos a função `set.seed()` para garantir que os resultados sejam reproduzíveis.
+ind <- sample(1:(nrow(df)*0.7), replace = FALSE)
+train <- df[ind,]
+test <- df[-ind,]
+```
+
+## Criação dos modelos
+
+Agora já podemos ajustar os modelos:
+
+```{r fit-models}
+
+## ajustar modelos
+form <- as.formula("avaliacao_reclamacao ~ . ") # construir formula
+
+# criar lista com resultados dos modelos
+system.time({
+  models.list <- list(
+  "decision.tree" = rpart::rpart(form, data = train), # arvore de decisao,
+  "ada" = ada::ada(form, data = train), # varplot(mod_ada),
+  "bayes" = e1071::naiveBayes(form, data = train),
+  "knn" = RWeka::IBk(form, data = train),
+  "svm" = e1071::svm(form, data = train, kernel = "radial"),
+  "randomForest" = randomForest::randomForest(form, data = train)
+)
+
+})
+
+```
+
+O que nós fizemos foi criar seis modelos diferentes e os armazenar em uma lista. Havia a possibilidade de salvar cada modelo em uma variável diferente, mas com isso perderíamos o potencial iterativo do pacote `purrr`. A função `system.time()` foi usada para medir o tempo levado pelo R para ajustar os modelos.
+
+Após o ajuste, podemos realizar diversas análises antes de proceder para as previsões em si.
+
+Por exemplo, qual foi a ávore de decisão gerada?
+
+```{r rpart}
+models.list$decision.tree %>% rpart.plot::rpart.plot()
+models.list$decision.tree %>% rpart.utils::rpart.lists()
+
+```
+
+Como temos diversos valores diferentes para as variáveis explanatórias do modelo, a visualização da árvore de decisão ficou prejudicada. Para inspecionar mais detalhadamente o output desse modelo, recomendo ler a documentação dos pacotes `rpart` e `rpart.plot`.
+
+Outra análise interessante é mensurar o nível de importância de cada variável explanatória:
+
+```{r randomForest-ex}
+models.list$randomForest %>% importance()
+```
+
+De acordo com a métrica usada, a variável `segmento_de_mercado` é a que mais influencia a variável resposta.
+
+## Previsões
+
+É aqui que a estratégia de salvar os modelos em uma lista se mostrará muito útil. Será usada a função `purrr::map()` para iterar sobre os modelos criados e extrair suas previsões. Caso você não esteja familiarizado com esse pacote, sugiro a leitura deste [ótimo tutorial](http://ctlente.com/pt/purrr-magic/) em português.
+
+```{r previsao, warning=FALSE}
+
+previsoes <- models.list %>% map(predict, test, type = "class")
+# dando uma olhada no output
+previsoes %>% map(head)
+```
+Conforme o output acima mostra, cada modelo gerou sua própria previsão para cada reclamação no conjunto de teste.
+
+Houve casos em que todos os modelos geraram a mesma previsão?
+
+```{r}
+# houve algum caso em que todos os modelos acertaram ou erraram?
+df.previsoes <- previsoes %>%
+  as.data.frame()
+
+matriz.tf <- matrix(NA, nrow = nrow(df.previsoes), ncol = ncol(df.previsoes))
+
+# substituir Resolvida por TRUE
+matriz.tf[df.previsoes == "Resolvida"] <- TRUE
+matriz.tf[is.na(matriz.tf)] <- FALSE
+head(matriz.tf)
+
+
+```
+
+Na matriz acima, substituímos o valor **Resolvida** por TRUE e **Não-Resolvida** por FALSE. A razão para isso é que fica mais fácil fazer a aritmética que precisamos, que é contar em cada linha a ocorrência de TRUEs, visto que no R TRUE e FALSE nada mais são do que representações booleanas dos algarimos 1 e 0, respectivamente.
+
+```{r}
+rowSums(matriz.tf) %>% table() %>% barplot()
+```
+
+O gráfico mostra algo bem interessante: é muito mais comum a maioria dos modelos convergirem a uma mesma resposta (ex.: todos eles preverem que uma reclamação será resolvida ou todos preverem que será não-resolvida) do que eles destoarem entre si.
+
+Dos casos em que todos os modelos previram um mesmo valor, em quantos eles estavam todos errados?
+
+```{r}
+todos_verdadeiro <- which(rowSums(matriz.tf) == 6)
+todos_falso <- which(rowSums(matriz.tf) == 0)
+
+table(test$avaliacao_reclamacao[todos_verdadeiro])
+table(test$avaliacao_reclamacao[todos_falso])
+
+```
+
+Os resultados acima podem ser interpretados da seguinte maneira: Dos mais de 4000 casos em que todos os modelos previram que a reclamação seria resolvida, houve 1112 em que elas não foram. Por outro lado, dos 720 casos em que todos os modelos previram "Não", houve 334 resolvidas. Um resultado bem ruim.
+
+No próximo e último post da série, vamos abordar outras maneiras de se avaliar a acurácia de modelos preditivos de classificação e como elas se aplicam no nosso objeto de estudo.
+
+```{r}
+# salvar previsoes para carregar posteriormente no próximo post
+saveRDS(previsoes, "data/previsoes-consumidor.gov.Rds")
+```
+
+

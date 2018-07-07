@@ -1,0 +1,168 @@
+---
+title: "Deixe seus gráficos no ggplot2 mais divertidos com imagens"
+output:
+  html_document:
+    keep_md: yes
+  github_document: default
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+
+Neste post, você aprenderá a:  
+* Inserir imagens da internet no `ggplot2`;  
+* Extrair links de imagens de uma página na Wikipedia;  
+* Usar o pacote `BETS` para pesquisar e baixar séries temporais brasileiras.  
+
+Os pacotes usados no post são:
+
+
+```{r}
+library(tidyverse)
+library(BETS)
+library(magrittr)
+library(rvest)
+library(lubridate)
+library(stringr)
+library(magick)
+library(grid)
+```
+
+## Coleta dos dados
+
+Vamos fazer um rápido exercício: baixar alguma série temporal brasileira de 20 anos para cá e mostrar como sua variável mudou ao longo dos diferentes mandatos dos presidentes da República.
+
+Ao invés de sair procurando na Internet uma fonte para os dados, podemos realizar essa etapa da coleta dos dados dentro do próprio R, graças ao pacote `BETS`.
+
+Suponha que desejamos pesquisar séries relacionados ao consumo de energia elétrica no Brasil. Para isso, usamos a função `BETS.search()`:
+
+```{r pesquisar series}
+# apesar de ser um pacote brasileiro, os termos de busca devem ser em ingles
+BETS.search("energy", view = FALSE) %>% head(20) %>% knitr::kable()
+
+```
+
+Vale a pena ler a documentação da função `BETS.search()` para entender o que cada variável do dataframe retornado significa. Para este post, vamos usar a série 1404, referente ao consumo de energia elétrica na indústria nacional.
+
+```{r baixar serie}
+
+energia <- BETS.get(1404, data.frame = TRUE)
+rbind(head(energia), tail(energia)) %>% knitr::kable()
+# mudar nome das colunas
+names(energia) <- c("data", "valor")
+
+```
+
+Temos então um dataframe de 462 linhas que vai desde Janeiro de 1979 até Junho de 2017. Plotar essa série com o `ggplot2` é muito simples:
+
+```{r gerar grafico base}
+p <- ggplot(energia, aes(x = data, y = valor)) + 
+  geom_line() +
+  geom_smooth(se = FALSE) +
+  theme_minimal() + 
+  labs(x = NULL, y = "kWh",
+       title = "Consumo de energia elétrica na indústria brasileira")
+p
+
+```
+
+
+Daí temos uma ideia diferente: que tal destacar no gráfico os períodos referentes aos diferentes presidentes da república que já tivemos? Para isso, criamos um data frame com os mandatos presidenciais da Nova República:
+
+```{r incluir tracejados de presidentes}
+
+df_republica <- tribble(
+  ~presidente, ~inicio,
+  "José Sarney", dmy(15031985), 
+  "Fernando Collor", dmy(15031990),
+  "Itamar Franco", dmy(29121992),
+  "FHC", dmy(01011995),
+  "Lula", dmy(01012003),
+  "Dilma Rousseff", dmy(01012011),
+  "Michel Temer", dmy(31082016)
+)
+
+
+# filtrar dados a partir do primeiro presidente da lista
+energia %<>% filter(data >= min(df_republica$inicio))
+
+# refazer o grafico com os dados filtrados
+p <- ggplot(energia, aes(x = data, y = valor)) + 
+  geom_line() +
+  geom_smooth(se = FALSE) +
+  theme_minimal() + 
+  labs(x = NULL, y = "kWh",
+       title = "Consumo de energia elétrica na indústria brasileira")
+
+
+p <- p + 
+  # plotar inicio dos mandatos como uma linha tracejada vertical
+  geom_vline(data = df_republica, aes(xintercept = inicio), linetype = "dashed")
+
+p
+```
+
+
+Contudo, podemos fazer algo diferente: Ao invés do nome, uma foto presidenciável! 
+
+Uma boa fonte para as fotos de nossos presidentes é a página da Wikipedia da [lista de presidentes do Brasil](https://pt.wikipedia.org/wiki/Lista_de_presidentes_do_Brasil). Precisamos ler o código fonte da página e extrair os links que estão marcados com a tag `img`.
+
+
+```{r scraping wikipedia}
+url <- "https://pt.wikipedia.org/wiki/Lista_de_presidentes_do_Brasil"
+
+fotos_presidentes <- url %>% 
+  read_html() %>% 
+  html_nodes("img") %>% 
+  html_attr("src")
+fotos_presidentes
+
+```
+
+Veja que as fotos dos presidentes da Nova República começam no elemento 39 e vão até o 45 do vetor de links. Além de extrair esses 7 links em específicos, precisamos também completá-los com um https: para  que possamos fazer o download das imagens.
+
+```{r}
+
+fotos_presidentes <- fotos_presidentes[39:45]
+# acrescentar url completa
+fotos_presidentes <- str_c("https:", fotos_presidentes)
+
+```
+
+Após extrair os links das fotos, usamos o ótimo pacote `magick` para as trazer para o R e meio que colar por cima do gráfico gerado com o `ggplot2`:
+
+```{r}
+# ler urls das fotos
+imgs <- image_read(fotos_presidentes)
+
+```
+
+Se você digitar `imgs[7]`, irá aparecer a foto do ~~vampirão~~ Michel Temer no painel Viewer do seu Rstudio.
+
+Finalmente, depois de obter as imagens, podemos as "colar" no gráfico do ggplot2 que criamos. Por enquanto, ainda não há um jeito muito automático de posicionar corretamente as imagens em um gráfico: os parâmetros de posicionamento do código abaixo foram obtidos por meio de tentativa e erro.
+ 
+
+```{r, fig.width=9}
+w = 0.05
+h = 0.15
+y1 = 0.15
+
+p + scale_y_continuous(limits = c(5000, 16000))
+grid.raster(imgs[1], width = w * 1.3, height = h, x = 0.18, y = y1) # sarney
+grid.raster(imgs[2], width = w, height = h, x = 0.285, y = y1) # collor
+grid.raster(imgs[3], width = w, height = h, x = 0.345, y = y1) # itamar
+grid.raster(imgs[4], width = w * 1.5, height = h, x = 0.50, y = y1) # fhc
+grid.raster(imgs[5], width = w * 1.5, height = h, x = 0.70, y = y1) # lula
+grid.raster(imgs[6], width = w * 1.5, height = h, x = 0.85, y = y1) # dilma
+grid.raster(imgs[7], width = w * 1.2, height = h, x = 0.97, y = y1) # temer
+
+
+```
+
+
+Juntar as imagens geradas pelo `magick` com o gráfico do `ggplot2` é feito por meio do pacote `grid`. Imagine que, ao criar um gráfico do `ggplot2`, o `grid` o interpreta como uma folha em branco, cujos eixos x e y vão de 0 a 1. Ou seja, quanto mais próximo a 1 for o argumento `x` da função `grid.raster()`, mais a direita a imagem ficará no gráfico.  
+
+

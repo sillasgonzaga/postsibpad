@@ -1,0 +1,162 @@
+---
+title: "Analisando sazonalidade com o Google Trends e o R"
+output:
+  html_document:
+    keep_md: yes
+  github_document: default
+---
+
+Neste post, você aprenderá a:  
+* Baixar dados do Google Trends com o R;  
+* Usar gráficos de séries temporais do pacote `forecast` para analisar a sazonalidade de uma série temporal;  
+* Converter uma série semanal em mensal;  
+* Transformar uma variável numérica de diferentes categorais em uma mesma escala para facilitar a visualização da correlação entre elas.  
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 9)
+```
+
+## O que é Sazonalidade?
+
+No contexto de Séries Temporais, **Sazonalidade** se refere a um padrão fixo que se repete no mesmo período do tempo. Podemos citar alguns exemplos de cabeça, como vendas de trajes de banho no verão e de casacos no inverno. Modelar a sazonalidade de uma série temporal é fundamental na aplicação de diversos modelos de previsão. 
+
+Imagine que você é dono de uma farmácia e deseja saber em qual época do ano as pessoas costumam ficar mais doentes. Como você acabou de abrir sua farmácia, não possui nenhum dado histórico para lhe ajudar na previsão. Uma fonte de informação útil para seu problema poderia ser o [Google Trends](http://trends.google.com/), que mostra o interesse das pessoas sobre um determinado tema ao longo do tempo.
+
+O pacote `gtrendsR` fornece uma interface simples de conexão do R com o Google Trends, sem a necessidade de autenticação por login ou algo do tipo.
+
+Para este post, usamos os seguintes pacotes:
+
+```{r, warning=FALSE, message = FALSE}
+library(gtrendsR) # interface com o Google Trends
+library(tidyverse) # Pq nao vivo sem ele
+library(magrittr) # Nem ele
+library(forecast) # Serve não só para previsões mas também para alguns gráficos legais
+library(lubridate) # manipulação de datas
+```
+
+Vamos então baixar dados referentes a buscas pelo termo  **gripe**. Usamos a função `gtrends` para baixar os dados, no qual atribuímos "BR" ao argumento `geo` para especificar que apenas buscas no Brasil sejam retornadas.
+
+```{r, cache = TRUE}
+busca <- "gripe"
+res <- gtrends(keyword = busca, geo = "BR")
+plot(res)
+
+```
+
+É perceptível que essa série temporal possui um forte componente sazonal, pois o número de pesquisas é maior no primeiro semestre que no segundo.
+
+O pacote `forecast` fornece algumas funções de gráficos úteis, mas para usá-las será necessário transformar os dados acima em objetos da classe `ts`. A variável `res`, na qual foi salva o output da função `gtrends`, é na verdade uma lista de dataframes. Um deles, o `interest_over_time`, é o que possui os dados plotados acima.
+
+```{r}
+df <- res$interest_over_time
+str(df)
+# transformar em ts 
+interesse_ts <- ts(df$hits, start = lubridate::decimal_date(min(df$date)),
+                   frequency = 52)
+
+```
+
+Note que usamos a função `lubridate::decimal_date()` para converter a data de início da série em decimal (formato aceito pela função `ts`) e definimos a frequência como 52 pois a série é semanal (e um ano possui 52 semanas).
+
+Com isso, já podemos usar diversos gráficos do pacote `forecast` para auxiliar a interpretação do componente sazonal da série:
+
+```{r}
+ggseasonplot(interesse_ts) + theme_minimal()
+ggmonthplot(interesse_ts) + theme_minimal()
+```
+
+Os dois gráficos mostram claramente que existe um pico de interesse da pessoas pela gripe no segundo trimestre do ano, mais especificamente entre as semanas 15 a 21.
+
+Talvez o fato de a série ser semanal dificulte a análise da sazonalidade neste caso. Afinal de contas, é muito mais fácil saber em que mês estamos do que em qual semana.
+
+Por isso, vamos transformar a série de semanal para mensal. Isso é feito usando a função `lubridate::floor_date()`, que recebe uma data de input e retorna o primeiro dia da referência escolhida. Por exemplo:
+
+```{r}
+data <- as.Date("2017-09-30")
+# primeiro dia da semana
+floor_date(data, "week")
+# primeiro dia do mes
+floor_date(data, "month")
+# primeiro dia do trimestre
+floor_date(data, "3 months")
+```
+
+Aplicando o que aprendemos:
+
+```{r}
+# transformar série semanal em mensal
+interesse_mensal <- df %>% 
+  mutate(date = as.Date(floor_date(date, "month"))) %>% 
+  # agrupar por mes
+  group_by(date) %>% 
+  # calcular a qtd de pesquisas por mes
+  summarise(hits = sum(hits))
+
+# refazer os gráficos de sazonalidade:
+interesse_ts_mensal <- ts(interesse_mensal$hits,
+                          start = lubridate::decimal_date(min(interesse_mensal$date)),
+                          frequency = 12)
+ggsubseriesplot(interesse_ts_mensal) + theme_minimal()
+ggseasonplot(interesse_ts_mensal) + theme_minimal()
+
+
+```
+
+
+Agora é mais fácil ver que os meses onde há maior busca pelo termo **gripe** são Abril e Maio.
+
+
+## Google Trends e as estações do ano
+
+Será que é possível detectar quando é verão ou inverno apenas com o Google Trends? Para isso, vamos utilizar uma tática meio curiosa: obter a quantidade de pesquisas de cidades de praia, como Maragogi (AL) e Porto Seguro (BA), e inverno, como Campos do Jordão (SP) e Barilhoche (Argentina).
+
+```{r, cache=TRUE}
+res <- gtrends(keyword = c("maragogi", "porto seguro", "campos do jordão", "bariloche"), geo = "BR")
+plot(res)
+```
+
+
+
+Como Porto Seguro aparenta ser uma cidade muito mais popular que as outras três (sendo Bariloche a menos popular), existe uma diferença de escala entre as quatro curvas, o que dificulta a detecção visual de padrões entre elas.
+
+Resolver esse problema é bem fácil: vamos transformar os dados de busca (hits) em uma mesma escala:
+
+```{r}
+res$interest_over_time %>% 
+  # agrupar para cada termo de busca
+  group_by(keyword) %>% 
+  # transformar os dados para uma mesma escala
+  mutate(hits = scale(hits)) %>% 
+  ggplot(aes(x = date, y = hits, color= keyword)) + 
+    geom_line() + 
+    labs(y = "Número de pesquisas no Google", x = NULL) + 
+    theme_minimal()
+
+```
+
+
+Agora ficou muito mais fácil perceber que existem padrões muito claros nos dados: o interesse das pessoas nas cidades de praia é inversamente proporcional ao interesse nas cidades de inverno. A partir dessa informação, fica fácil identificar que o segundo trimestre corresponde ao inverno e o primeiro ao verão.
+
+Essa visualização fica ainda mais legal se agregarmos as cidades de acordo com suas estações do ano e plotarmos um gráfico de área:
+
+```{r}
+
+res$interest_over_time %>%
+  mutate(local = ifelse(keyword %in% c("maragogi", "porto seguro"),
+                        "Verão",
+                        "Inverno")) %>% 
+  group_by(date, local) %>% 
+  summarise(hits = sum(hits)) %>% 
+  group_by(local) %>% 
+  mutate(hits = scale(hits)) %>% 
+  ggplot(aes(x = date, y = hits, color = local, fill = local)) + 
+    geom_area() +
+    theme_minimal()
+
+```
+
+
+Isso parece ser óbvio (de fato, é), mas imagine que um analista poderia usar esses dados como índices sazonais. Suponha que se deseja saber que uma série temporal desconhecida possua componente sazonal maior no inverno. Uma maneira de se fazer isso seria criar um índice a partir das buscas por temas relacionados a inverno (como a curva de Campos do Jordão acima): se a série temporal em questão possuir correlação matemática positiva com esse índice, é porque ela possivelmente reage positivamente ao inverno. Isso não é exatamente um método científico, mas serve.
+
+
+
